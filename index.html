@@ -780,7 +780,7 @@ html,body{height:100%;width:100%;overflow:hidden;font-family:'Montserrat',sans-s
 <!-- PRINT -->
 <div id="print-area"></div>
 <!-- COPYRIGHT -->
-<div id="copyright-bar">©2026 SRISP &nbsp;·&nbsp; v1.4 &nbsp;·&nbsp; Restaurant POS</div>
+<div id="copyright-bar">©2026 SRISP &nbsp;·&nbsp; v1.4a &nbsp;·&nbsp; VenaX Osteria</div>
 
 <script type="module">
 // ════════════ FIREBASE SETUP ════════════
@@ -962,8 +962,13 @@ async function loadFromFirestore(){
     _fsLoaded=true;
     localStorage.setItem(SK,JSON.stringify(db));
 
-    // Refresh current admin view if already logged in
-    if(S.role==='admin') renderASec(curSec);
+    // Refresh current admin view after data loads
+    if(S.role==='admin'&&curSec!=='settings'){
+      renderASec(curSec);
+    }
+    // Always pre-populate payments, logs, paymethod in background
+    // so they're ready when user navigates there
+    console.log(`Firebase loaded: ${db.payments.length} payments, ${db.activityLogs.length} logs, ${db.paymentMethods.length} payMethods`);
 
   }catch(e){
     console.error('Firebase load error:',e);
@@ -990,27 +995,33 @@ function showLoadingOverlay(show){
 
 // ════════ REAL-TIME LISTENERS ════════
 function setupRealtimeListeners(){
-  // Listen to orders in real-time (dapur + waiter sync)
   if(_unsubOrders)_unsubOrders();
   _unsubOrders=onSnapshot(collection(fdb,'orders'),(snap)=>{
     db.orders=snap.docs.map(d=>({...d.data(),id:d.id}));
     localStorage.setItem(SK,JSON.stringify(db));
     if(S.role==='kitchen')renderKitchen();
     if(S.role==='waiter'){renderMejaGrid();renderOrderPanel();updateNotifs();updateOrderBadge();}
-    if(S.role==='admin'&&(curSec==='dashboard'||curSec==='orders'))renderASec(curSec);
+    if(S.role==='admin'&&curSec!=='settings'&&(curSec==='dashboard'||curSec==='orders'))renderASec(curSec);
   });
-  // Listen to payments
   if(_unsubPayments)_unsubPayments();
   _unsubPayments=onSnapshot(collection(fdb,'payments'),(snap)=>{
     db.payments=snap.docs.map(d=>({...d.data(),id:d.id,editableTotal:d.data().editableTotal??null}));
     localStorage.setItem(SK,JSON.stringify(db));
-    if(S.role==='admin'&&(curSec==='sales'||curSec==='dashboard'||curSec==='rekap'))renderASec(curSec);
+    if(S.role==='admin'&&curSec!=='settings'&&(curSec==='sales'||curSec==='dashboard'||curSec==='rekap'))renderASec(curSec);
   });
-  // Listen to activityLogs (real-time update on log page)
-  let _unsubLogs=onSnapshot(collection(fdb,'activityLogs'),(snap)=>{
+  // Listen to activityLogs
+  onSnapshot(collection(fdb,'activityLogs'),(snap)=>{
     db.activityLogs=snap.docs.map(d=>({...d.data(),id:d.id})).sort((a,b)=>b.ts-a.ts);
     localStorage.setItem(SK,JSON.stringify(db));
     if(S.role==='admin'&&curSec==='actlog')rActlog();
+  });
+  // Listen to paymentMethods
+  onSnapshot(collection(fdb,'paymentMethods'),(snap)=>{
+    if(snap.docs.length>0){
+      db.paymentMethods=snap.docs.map(d=>({...d.data(),id:d.id}));
+      localStorage.setItem(SK,JSON.stringify(db));
+      if(S.role==='admin'&&curSec==='paymethod')rPayMethod();
+    }
   });
 }
 
@@ -1051,18 +1062,30 @@ async function init(){
 
 function applySettings(){
   const s=db.settings;
+  // Apply visual settings (safe - not inputs)
   const bgEl=document.getElementById('bg');
-  bgEl.style.backgroundImage=`url('${s.bgUrl}')`;
-  // Apply bg also to login screen overlay
-  document.getElementById('login-screen').style.backgroundImage=`url('${s.bgUrl}')`;
-  document.getElementById('login-screen').style.backgroundSize='cover';
-  document.getElementById('login-screen').style.backgroundPosition='center';
-  document.getElementById('tb-name').textContent=`✦ ${s.restoName.toUpperCase()}`;
-  document.getElementById('l-title').textContent=`✦ ${s.restoName.toUpperCase()}`;
-  document.getElementById('l-tag').textContent=s.tagline;
-  const sn=document.getElementById('s-name');
-  if(sn){sn.value=s.restoName;document.getElementById('s-tag').value=s.tagline;document.getElementById('s-addr').value=s.address;document.getElementById('s-phone').value=s.phone;document.getElementById('s-bg').value=s.bgUrl||'';}
-  const bgPrev=document.getElementById('bg-preview');if(bgPrev&&s.bgUrl){bgPrev.src=s.bgUrl;bgPrev.style.display='block';}
+  if(bgEl) bgEl.style.backgroundImage=`url('${s.bgUrl}')`;
+  const ls=document.getElementById('login-screen');
+  if(ls){ls.style.backgroundImage=`url('${s.bgUrl}')`;ls.style.backgroundSize='cover';ls.style.backgroundPosition='center';}
+  const tbn=document.getElementById('tb-name');if(tbn)tbn.textContent=`✦ ${s.restoName.toUpperCase()}`;
+  const lt=document.getElementById('l-title');if(lt)lt.textContent=`✦ ${s.restoName.toUpperCase()}`;
+  const ltag=document.getElementById('l-tag');if(ltag)ltag.textContent=s.tagline;
+  // Only fill input fields if settings panel is NOT currently focused by user
+  const active=document.activeElement;
+  const settingInputIds=['s-name','s-tag','s-addr','s-phone','s-bg'];
+  const userIsTypingInSettings=active&&settingInputIds.includes(active.id);
+  if(!userIsTypingInSettings){
+    const sn=document.getElementById('s-name');
+    if(sn){
+      sn.value=s.restoName||'';
+      document.getElementById('s-tag').value=s.tagline||'';
+      document.getElementById('s-addr').value=s.address||'';
+      document.getElementById('s-phone').value=s.phone||'';
+      const sbg=document.getElementById('s-bg');if(sbg&&s.bgUrl&&!sbg.value)sbg.value=s.bgUrl;
+    }
+  }
+  const bgPrev=document.getElementById('bg-preview');
+  if(bgPrev&&s.bgUrl){bgPrev.src=s.bgUrl;bgPrev.style.display='block';}
 }
 
 function quickOpenSettings(){
@@ -1239,7 +1262,14 @@ function switchView(v){
   const nb=document.getElementById('nb-'+v);if(nb)nb.classList.add('active');
   if(v==='waiter')refreshWaiter();
   if(v==='kitchen')renderKitchen();
-  if(v==='admin'){aNav('dashboard',document.querySelector('.anav'));applySettings();}
+  if(v==='admin'){
+    curSec='dashboard';
+    document.querySelectorAll('.anav').forEach(n=>n.classList.remove('active'));
+    const dashNav=document.querySelector('.anav');if(dashNav)dashNav.classList.add('active');
+    document.querySelectorAll('.asec').forEach(s=>s.classList.remove('active'));
+    const dashSec=document.getElementById('asec-dashboard');if(dashSec)dashSec.classList.add('active');
+    rDash();
+  }
 }
 
 // ════════════ WAITER ════════════
@@ -1499,10 +1529,10 @@ function aNav(sec,el){
   if(el)el.classList.add('active');
   document.querySelectorAll('.asec').forEach(s=>s.classList.remove('active'));
   document.getElementById('asec-'+sec).classList.add('active');
-  renderASec(sec);
+  renderASec(sec,true); // fromNav=true
 }
 
-function renderASec(s){
+function renderASec(s,fromNav){
   if(s==='dashboard')rDash();
   else if(s==='orders')rOrders();
   else if(s==='products')rProds();
@@ -1513,10 +1543,12 @@ function renderASec(s){
   else if(s==='actlog')rActlog();
   else if(s==='rekap')rRekap();
   else if(s==='paymethod')rPayMethod();
-  else if(s==='settings')applySettings();
+  // settings only refreshed when user explicitly navigates there (fromNav=true)
+  else if(s==='settings'&&fromNav)applySettings();
 }
 
-setInterval(()=>{if(S.role==='admin')renderASec(curSec);},10000);
+// Auto-refresh only non-settings sections
+setInterval(()=>{if(S.role==='admin'&&curSec!=='settings')renderASec(curSec);},10000);
 
 function rDash(){
   const ao=db.orders.filter(o=>o.status!=='paid');
@@ -2075,69 +2107,31 @@ window.addEventListener('resize',()=>{
 
 
 // ═══ EXPOSE FUNCTIONS TO GLOBAL SCOPE (required for onclick in module) ═══
-window.aNav = typeof aNav !== "undefined" ? aNav : undefined;
-window.addPayMethod = typeof addPayMethod !== "undefined" ? addPayMethod : undefined;
-window.calcChange = typeof calcChange !== "undefined" ? calcChange : undefined;
-window.changeAdminPw = typeof changeAdminPw !== "undefined" ? changeAdminPw : undefined;
-window.changeBg = typeof changeBg !== "undefined" ? changeBg : undefined;
-window.changeBgFile = typeof changeBgFile !== "undefined" ? changeBgFile : undefined;
-window.closeM = typeof closeM !== "undefined" ? closeM : undefined;
-window.confirmPay = typeof confirmPay !== "undefined" ? confirmPay : undefined;
-window.doAdminLogin = typeof doAdminLogin !== "undefined" ? doAdminLogin : undefined;
-window.doLogin = typeof doLogin !== "undefined" ? doLogin : undefined;
-window.doMove = typeof doMove !== "undefined" ? doMove : undefined;
-window.kFilter = typeof kFilter !== "undefined" ? kFilter : undefined;
-window.lTab = typeof lTab !== "undefined" ? lTab : undefined;
-window.loginKitchen = typeof loginKitchen !== "undefined" ? loginKitchen : undefined;
-window.logout = typeof logout !== "undefined" ? logout : undefined;
-window.openAdminLogin = typeof openAdminLogin !== "undefined" ? openAdminLogin : undefined;
-window.openCatModal = typeof openCatModal !== "undefined" ? openCatModal : undefined;
-window.openProdModal = typeof openProdModal !== "undefined" ? openProdModal : undefined;
-window.openTableModal = typeof openTableModal !== "undefined" ? openTableModal : undefined;
-window.openWaiterModal = typeof openWaiterModal !== "undefined" ? openWaiterModal : undefined;
-window.prevImg = typeof prevImg !== "undefined" ? prevImg : undefined;
-window.printBill = typeof printBill !== "undefined" ? printBill : undefined;
-window.quickOpenSettings = typeof quickOpenSettings !== "undefined" ? quickOpenSettings : undefined;
-window.renderMenuGrid = typeof renderMenuGrid !== "undefined" ? renderMenuGrid : undefined;
-window.resetAllSales = typeof resetAllSales !== "undefined" ? resetAllSales : undefined;
-window.resetLogs = typeof resetLogs !== "undefined" ? resetLogs : undefined;
-window.saveCat = typeof saveCat !== "undefined" ? saveCat : undefined;
-window.saveNote = typeof saveNote !== "undefined" ? saveNote : undefined;
-window.saveProd = typeof saveProd !== "undefined" ? saveProd : undefined;
-window.saveSettings = typeof saveSettings !== "undefined" ? saveSettings : undefined;
-window.saveTable = typeof saveTable !== "undefined" ? saveTable : undefined;
-window.saveWaiter = typeof saveWaiter !== "undefined" ? saveWaiter : undefined;
-window.sendOrder = typeof sendOrder !== "undefined" ? sendOrder : undefined;
-window.setRkPeriod = typeof setRkPeriod !== "undefined" ? setRkPeriod : undefined;
-window.switchView = typeof switchView !== "undefined" ? switchView : undefined;
-window.wTab = typeof wTab !== "undefined" ? wTab : undefined;
-window.chgQty = typeof chgQty !== "undefined" ? chgQty : undefined;
-window.delItem = typeof delItem !== "undefined" ? delItem : undefined;
-window.openNote = typeof openNote !== "undefined" ? openNote : undefined;
-window.openPay = typeof openPay !== "undefined" ? openPay : undefined;
-window.addItem = typeof addItem !== "undefined" ? addItem : undefined;
-window.togProd = typeof togProd !== "undefined" ? togProd : undefined;
-window.delProd = typeof delProd !== "undefined" ? delProd : undefined;
-window.delCat = typeof delCat !== "undefined" ? delCat : undefined;
-window.delTable = typeof delTable !== "undefined" ? delTable : undefined;
-window.delWaiter = typeof delWaiter !== "undefined" ? delWaiter : undefined;
-window.openMove = typeof openMove !== "undefined" ? openMove : undefined;
-window.setKS = typeof setKS !== "undefined" ? setKS : undefined;
-window.doMove = typeof doMove !== "undefined" ? doMove : undefined;
-window.updatePM = typeof updatePM !== "undefined" ? updatePM : undefined;
-window.savePM = typeof savePM !== "undefined" ? savePM : undefined;
-window.deletePayMethod = typeof deletePayMethod !== "undefined" ? deletePayMethod : undefined;
-window.editSaleTotal = typeof editSaleTotal !== "undefined" ? editSaleTotal : undefined;
-window.saveSaleTotal = typeof saveSaleTotal !== "undefined" ? saveSaleTotal : undefined;
-window.resetSaleTotal = typeof resetSaleTotal !== "undefined" ? resetSaleTotal : undefined;
-window.deleteSale = typeof deleteSale !== "undefined" ? deleteSale : undefined;
-window.rActlog = typeof rActlog !== "undefined" ? rActlog : undefined;
-window.rRekap = typeof rRekap !== "undefined" ? rRekap : undefined;
-window.rPayMethod = typeof rPayMethod !== "undefined" ? rPayMethod : undefined;
-window.rSales = typeof rSales !== "undefined" ? rSales : undefined;
-window.openAdminLogin = typeof openAdminLogin !== "undefined" ? openAdminLogin : undefined;
-window.fillLoginWaiters = typeof fillLoginWaiters !== "undefined" ? fillLoginWaiters : undefined;
-
+const _expose = [
+  'aNav','addPayMethod','calcChange','changeAdminPw','changeBg','changeBgFile',
+  'closeM','confirmPay','doAdminLogin','doLogin','doMove','kFilter','lTab',
+  'loginKitchen','logout','openAdminLogin','openCatModal','openProdModal',
+  'openTableModal','openWaiterModal','prevImg','printBill','quickOpenSettings',
+  'renderMenuGrid','resetAllSales','resetLogs','saveCat','saveNote','saveProd',
+  'saveSettings','saveTable','saveWaiter','sendOrder','setRkPeriod','switchView','wTab',
+  'chgQty','delItem','openNote','openPay','addItem','togProd','delProd',
+  'delCat','delTable','delWaiter','openMove','setKS','updatePM','savePM',
+  'deletePayMethod','editSaleTotal','saveSaleTotal','resetSaleTotal','deleteSale',
+  'rActlog','rRekap','rPayMethod','rSales','fillLoginWaiters','refreshWaiter',
+];
+const _fns = {
+  aNav,addPayMethod,calcChange,changeAdminPw,changeBg,changeBgFile,
+  closeM,confirmPay,doAdminLogin,doLogin,doMove,kFilter,lTab,
+  loginKitchen,logout,openAdminLogin,openCatModal,openProdModal,
+  openTableModal,openWaiterModal,prevImg,printBill,quickOpenSettings,
+  renderMenuGrid,resetAllSales,resetLogs,saveCat,saveNote,saveProd,
+  saveSettings,saveTable,saveWaiter,sendOrder,setRkPeriod,switchView,wTab,
+  chgQty,delItem,openNote,openPay,addItem,togProd,delProd,
+  delCat,delTable,delWaiter,openMove,setKS,updatePM,savePM,
+  deletePayMethod,editSaleTotal,saveSaleTotal,resetSaleTotal,deleteSale,
+  rActlog,rRekap,rPayMethod,rSales,fillLoginWaiters,refreshWaiter,
+};
+Object.keys(_fns).forEach(k=>{window[k]=_fns[k];});
 init();
 </script>
 </body>
